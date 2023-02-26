@@ -79,27 +79,6 @@ def create_4d_src_dataset(source_4d_depth_levels, ds: xr.Dataset, pmid=None, nam
         dims=["depth", "time", "lat", "lon"],
     ).to_dataset()
 
-def create_2d_src_dataset(source_2d_depth_levels, ds: xr.Dataset, pmid=None, name="temperature"
-                          ) -> xr.Dataset:
-    """Create dataset from N2 output
-
-    Args:
-        source_2d_depth_levels: the 2D N2 calculated array
-        ds: The original dataset for temperature or salinity used to extract coordinates
-        pmid: The new depth levels after N2 clauclations (one less than depth of temperature)
-        name: Name of the variable to store as dataset
-
-    Returns: Xarray Dataset containing N2 with coordinates
-
-    """
-    return xr.DataArray(
-        name=name,
-        data=source_2d_depth_levels,
-        coords=[pmid,
-                ds["time"].values],
-        dims=["depth", "time"],
-    ).to_dataset()
-
 
 def extrapolate_biology(ds_in: xr.Dataset, ds_out: xr.Dataset) -> xr.Dataset:
     """Extrapolate/interpolate the biological data to the physical grid
@@ -127,7 +106,7 @@ def extrapolate_biology(ds_in: xr.Dataset, ds_out: xr.Dataset) -> xr.Dataset:
     return regridder(ds_in)
 
 
-def merge_and_save_datasets(station: {}, export_point_averaged=True) -> {}:
+def merge_and_save_datasets(station: {}) -> {}:
     """Merges the various datasets in the dictionary and broadcasts
     Args:
         station: dictionary contining the various datasets
@@ -173,15 +152,12 @@ def merge_and_save_datasets(station: {}, export_point_averaged=True) -> {}:
     for ds, netcdf_file in zip([ds_temp_salt, ds_phyc_extrapolated, ds_chl_extrapolated], [netcdf_file1, netcdf_file2, netcdf_file3]):
         if os.path.exists(netcdf_file):
             os.remove(netcdf_file)
-        if export_point_averaged:
-            ds.mean({"lat","lon"}).to_netcdf(netcdf_file)
-        else:
-            ds.to_netcdf(netcdf_file)
+        ds.mean({"lat","lon"}).to_netcdf(netcdf_file)
         print(f"Saved spatially averaged dataset to file: {netcdf_file}")
     return station
 
 
-def calculate_brunt_vaisala(station: {}, export_point_averaged=True):
+def calculate_brunt_vaisala(station: {}):
     """Calculate Bru-Vaisala frequency (stability) for the water column
 
     Args: salinity, temperature and pressure datasets stored in dictionary
@@ -190,43 +166,26 @@ def calculate_brunt_vaisala(station: {}, export_point_averaged=True):
     ds = station["ds_temp_salt"]
     ds = ds.transpose("depth", "time", "lat", "lon")
 
-    if export_point_averaged:
-        ds = ds.mean({"lat", "lon"})
-        N2, pmid = xr.apply_ufunc(gsw.Nsquared,
-                            ds["so"].values,
-                            ds["thetao"].values,
-                            ds["pressure"].values,
-                            input_core_dims=[["depth", "time"],
-                                            ["depth", "time"],
-                                            ["depth"]],
-                            output_core_dims=[["depth", "time"],
-                                            ["depth", "time"]],
-                            exclude_dims=set(("depth", "time",)),
-                            vectorize=True)
-        ds_n2 = create_2d_src_dataset(N2, ds, pmid=np.squeeze(pmid[:, 0]), name="n2")
-    else:
-        N2, pmid = xr.apply_ufunc(gsw.Nsquared,
-                                ds["so"].values,
-                                ds["thetao"].values,
-                                ds["pressure"].values,
-                                input_core_dims=[["depth", "time", "lat", "lon"],
-                                                ["depth", "time", "lat", "lon"],
-                                                ["depth"]],
-                                output_core_dims=[["depth", "time", "lat", "lon"],
-                                                    ["depth", "time", "lat", "lon"]],
-                                exclude_dims=set(("depth", "time", "lat", "lon",)),
-                                vectorize=True)
+    N2, pmid = xr.apply_ufunc(gsw.Nsquared,
+                              ds["so"].values,
+                              ds["thetao"].values,
+                              ds["pressure"].values,
+                              input_core_dims=[["depth", "time", "lat", "lon"],
+                                               ["depth", "time", "lat", "lon"],
+                                               ["depth"]],
+                              output_core_dims=[["depth", "time", "lat", "lon"],
+                                                ["depth", "time", "lat", "lon"]],
+                              exclude_dims=set(("depth", "time", "lat", "lon",)),
+                              vectorize=True)
 
-        ds_n2 = create_4d_src_dataset(N2, ds, pmid=np.squeeze(pmid[:, 0, 0, 0]), name="n2")
-    
-    print(f"Created dataset for N2  {ds_n2['n2']}")
+    ds_n2 = create_4d_src_dataset(N2, ds, pmid=np.squeeze(pmid[:, 0, 0, 0]), name="n2")
 
     base_n2 = f"{station['base_directory']}"
     netcdf_file = f"{base_n2}/{station['station_name']}_n2.nc"
     if os.path.exists(netcdf_file):
         os.remove(netcdf_file)
     ds_n2.to_netcdf(netcdf_file)
-    print(f"Saved N2 to file: {netcdf_file}")
+    print(f"Saved temperature, salinity, and phytoplankton to file: {netcdf_file}")
 
 
 def organize_dataset(variable_id, station, start_time, end_time, first=False):
@@ -454,8 +413,7 @@ for index, row in df.iterrows():
             first = False
         stations[row.Site] = station
         first = True
-        export_point_averaged=True
 
-        station = merge_and_save_datasets(station, export_point_averaged)
-        station = calculate_brunt_vaisala(station, export_point_averaged)
+        station = merge_and_save_datasets(station)
+        station = calculate_brunt_vaisala(station)
         stations[station] = station
